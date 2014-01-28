@@ -1,0 +1,287 @@
+#!/bin/bash
+
+# If you change this makes ure it works with download()
+DOWNLOADER='wget'
+
+# See comment above check_build_deps for details
+DEPS=(
+	"build-essential"
+	"python-stdeb>=0.6.0+20100620-4"
+	"devscripts"
+	"python-pip"
+	"python-all-dev"
+)
+
+USAGE="$(basename "$0") [-h] [-t DIR] [-o DIR] [-V VERSION] (-f FILE | -d URL)
+
+Generates debian packages from python packages (e.g. pip).
+
+    -h		show this help
+    -f FILE	an archive to package
+    -d URL	the url to an archive to package
+    -t DIR	the temporary directory to used
+    -o DIR	the directory to place the .deb in after completion
+    -V VERSION	append this string to the package version (e.g. 0.1.11 becomes 0.1.11-version1)
+
+Examples:
+	./python-packager -d http://pypi.python.org/packages/source/M/MarkupSafe/MarkupSafe-0.11.tar.gz
+	./python-packager -f MarkupSafe-0.11.tar.gz -t ./tmp/
+	./python-packager -f MarkupSafe-0.11.tar.gz -o ./packages/
+"
+
+# Verifies that all items in $DEPS are installed with an acceptable version.
+# Uses standard apt-get version specification to determine this.
+# See dpkg --compare-versions for more info
+#  Examples:
+#    pkga=0.0.1
+#    pkgb
+#    pkgc>=1.0.1 or pkgc>1.0.1, these are equivalent
+#    pkgd<=9.9.9 or pkgd<9.9.9, these are equivalent
+#    pkge<<10.0.1, strictly less than
+#    pkgf>>0.0.1, strictly greater than
+function check_build_deps()
+{
+	local FAILED=false
+	for PACKAGE in ${DEPS[@]}
+	do
+		local VERSION=".*" # Match everything in the event no version is available, simplifies grepping below
+		local OLD_PACKAGE
+		local COMPARATOR
+		if [[ "$PACKAGE" =~ ^.+[\>=\<]{1,2}.+$ ]]
+		then
+			OLD_PACKAGE="$PACKAGE"
+			# Split $PACKAGE into name and version, think makeshift regex group extraction via substring matching
+			VERSION="${PACKAGE#*[>=<]}"
+			VERSION="${VERSION#[>=<]}"
+			PACKAGE="${PACKAGE%[>=<]*}"
+			PACKAGE="${PACKAGE%[>=<]*}"
+			# Now get the ==, >=, or <=
+			COMPARATOR="${OLD_PACKAGE#$PACKAGE}"
+			COMPARATOR="${COMPARATOR%$VERSION}"
+		fi
+
+		local INSTALLED_VERSION=$(apt-cache show "$PACKAGE" 2> /dev/null | grep -o "Version: .*$")
+		local returned="$?"
+
+		#Strip unecessary parts
+		local INSTALLED_VERSION="${INSTALLED_VERSION#Version: }"
+		local CORRECT_VERSION=true
+		if [[ "$VERSION" != ".*" ]]
+		then
+			dpkg --compare-versions "$INSTALLED_VERSION" "$COMPARATOR" "$VERSION"
+			if [[ ! "$?" -eq "0" ]]
+			then
+				CORRECT_VERSION=false
+			fi
+		fi
+
+		if [[ "$returned" -ne "0" || "$CORRECT_VERSION" == false ]]
+		then
+			if [[ -n "$OLD_PACKAGE" ]]
+			then
+				echo "Missing package \"$OLD_PACKAGE\""
+			else
+				echo "Missing package \"$PACKAGE\""
+			fi
+
+			FAILED=true
+		fi
+	done
+
+	if [[ "$FAILED" == true ]]
+	then
+		return 1
+	else
+		return 0
+	fi
+}
+
+function download() {
+	# Move to temporary directory
+	cd "$2" > /dev/null
+
+	# Download the archive
+	$DOWNLOADER "$1"
+	local SUCCESS="$?"
+	if [[ ! "$SUCCESS" -eq 0 ]]
+	then
+		cd - > /dev/null
+		return "$SUCCESS"
+	fi
+
+	# Get the downloaded archive's name
+	local FILE=$(ls -rt | tail -n 1)
+	echo "$FILE"
+	cd - > /dev/null
+	return 0
+}
+
+function package() {
+	local DEBIAN_PATH="$1"
+	local TMP_DIR="$2"
+	local OUTPUT_DIR="$3"
+	local VERSION="$4"
+	local CURRENT_DIR="$PWD"
+
+	# Create the dsc
+	py2dsc --dist-dir="$TMP_DIR" "${DEBIAN_PATH}"
+	local SUCCESS="$?"
+	if [[ "$SUCCESS" -ne 0 ]]
+	then
+		echo "ERROR: py2dsc failed! Error code: $SUCCESS"
+		return "$SUCCESS"
+	fi
+
+	# Determine the path we need to cd to
+	DEBIAN_PATH="${DEBIAN_PATH%.*}"
+	DEBIAN_PATH="${DEBIAN_PATH%.tar}"
+	DEBIAN_PATH=$(find "$TMP_DIR" -iname "$(basename $DEBIAN_PATH)")
+	cd "${DEBIAN_PATH}/debian"
+
+	# Modify version to match *-rdio#
+	if [[ "$VERSION" ]]
+	then
+		sed -i "s/-1)/-${VERSION})/" changelog
+		SUCCESS=$?
+		if [[ "$SUCCESS" -ne 0 ]]
+		then
+			echo "ERROR: sed failed! Error code: $SUCCESS"
+			cd "$CURRENT_DIR"
+			return "$SUCCESS"
+		fi
+	else
+		# If no version was specified the user should be prompted for one
+		debchange -e
+	fi
+
+	# Build the package
+	debuild -us -uc #--no-lintian
+	SUCCESS="$?"
+
+	if [[ "$SUCCESS" -ne 0 ]]
+	then
+		cd "$CURRENT_DIR"
+		return "$SUCCESS"
+	fi
+
+	# Finally, copy the .deb to OUTPUT_DIR
+	cd "$CURRENT_DIR"
+	cp "${TMP_DIR}"/*.deb "$OUTPUT_DIR"
+	SUCCESS="$?"
+
+	return "$SUCCESS"
+}
+
+function main() {
+	# Note that we don't use [[ ]] here in order to call the function
+	if ! check_build_deps
+	then
+		echo "ERROR: All build dependencies not met!"
+		exit 1
+	fi
+
+	if [[ "$#" -lt 2 ]]
+	then
+		echo "$USAGE"
+		exit 1
+	fi
+
+	local URI
+	local ARCHIVE_PATH
+	local TMP_DIR
+	local RET
+	local OUTPUT_DIR="$PWD"
+	local DELETE=true
+	local VERSION
+	while getopts "d:f:o:t:V:" OPTION;
+	do
+		case "$OPTION" in
+		d)
+			URI="$OPTARG"
+		;;
+		f)
+			ARCHIVE_PATH="$OPTARG"
+		;;
+		o)
+			OUTPUT_DIR="$OPTARG"
+		;;
+		t)
+			TMP_DIR="$OPTARG"
+			# Don't delete the tmp directory if it was user specified
+			DELETE=false
+		;;
+		v)
+			VERSION="$OPTARG"
+		;;
+		?)
+			echo "$USAGE"
+			exit 1
+		;;
+		esac
+	done
+
+	if [[ ! "$URI" && ! "$ARCHIVE_PATH" ]]
+	then
+		echo "ERROR: Expected either -d or -f to be provided!"
+		exit 1
+	fi
+
+	if [[ -z "$TMP_DIR" ]]
+	then
+		TMP_DIR=$(mktemp -d "./XXXXXXXXXX")
+		if [[ ! "$?" -eq 0 ]]
+		then
+			echo "ERROR: Could not create ${TMP_DIR}! Error code: $?"
+			exit 1
+		fi
+	else
+		mkdir -p "$TMP_DIR"
+		if [[ ! "$?" -eq 0 ]]
+		then
+			echo "ERROR: Could not create ${TMP_DIR}! Error code: $?"
+			exit 1
+		fi
+	fi
+
+	if [[ "$URI" ]]
+	then
+		ARCHIVE_PATH=$(download "$URI" "$TMP_DIR")
+		if [[ "$?" -gt 0 ]]
+		then
+			echo "ERROR: Could not download archive! Error code: $?"
+			exit 1
+		fi
+
+		package "${TMP_DIR}/${ARCHIVE_PATH}" "$TMP_DIR" "$OUTPUT_DIR" "$VERSION"
+		RET=$?
+	elif [[ "$ARCHIVE_PATH" ]]
+	then
+		package "$ARCHIVE_PATH" "$TMP_DIR" "$OUTPUT_DIR" "$VERSION"
+		RET=$?
+	fi
+
+	if [[ "$RET" != 0 ]]
+	then
+		echo "ERROR: The build failed with error code $RET"
+		echo "ERROR: The temporary files will be preserved for further information, if required."
+	fi
+
+	# Be super careful about cleaning up
+	if [[ "$DELETE" == true && "$RET" == 0 ]]
+	then
+		if [[ "$TMP_DIR" && -d "$TMP_DIR" && "$TMP_DIR" != "$PWD" && "$TMP_DIR" != "$HOME" ]]
+		then
+			rm -R "$TMP_DIR"
+			echo "Cleaning up $TMP_DIR"
+		else
+			echo "WARNING: Something weird happened, did not clean up $TMP_DIR"
+		fi
+	else
+		echo "WARNING: Not cleaning up $TMP_DIR"
+	fi
+
+	exit $RET
+}
+
+main $@
+
