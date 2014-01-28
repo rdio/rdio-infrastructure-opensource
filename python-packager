@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# If you change this makes ure it works with download()
+# If you change this make sure it works with download()
 DOWNLOADER='wget'
 
 # See comment above check_build_deps for details
