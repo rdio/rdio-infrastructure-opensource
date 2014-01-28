@@ -210,7 +210,7 @@ function main() {
 			# Don't delete the tmp directory if it was user specified
 			DELETE=false
 		;;
-		v)
+		V)
 			VERSION="$OPTARG"
 		;;
 		?)
