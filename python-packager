@@ -44,9 +44,13 @@ function check_build_deps()
 	local FAILED="false"
 	for PACKAGE in ${DEPS[@]}
 	do
+		local CORRECT_VERSION="true"
 		local VERSION=".*" # Match everything in the event no version is available, simplifies grepping below
+		local INSTALLED_VERSION
+		local RETURNED
 		local OLD_PACKAGE
 		local COMPARATOR
+
 		if [[ "$PACKAGE" =~ ^.+[\>=\<]{1,2}.+$ ]]
 		then
 			OLD_PACKAGE="$PACKAGE"
@@ -60,12 +64,11 @@ function check_build_deps()
 			COMPARATOR="${COMPARATOR%$VERSION}"
 		fi
 
-		local INSTALLED_VERSION=$(dpkg -s "$PACKAGE" 2> /dev/null | grep -o "Version: .*$")
-		local returned="$?"
+		INSTALLED_VERSION=$(dpkg -s "$PACKAGE" 2> /dev/null | grep -o "Version: .*$")
+		RETURNED="$?"
 
 		#Strip unecessary parts
-		local INSTALLED_VERSION="${INSTALLED_VERSION#Version: }"
-		local CORRECT_VERSION="true"
+		INSTALLED_VERSION="${INSTALLED_VERSION#Version: }"
 		if [[ "$VERSION" != ".*" ]]
 		then
 			dpkg --compare-versions "$INSTALLED_VERSION" "$COMPARATOR" "$VERSION"
@@ -75,7 +78,7 @@ function check_build_deps()
 			fi
 		fi
 
-		if [[ "$returned" -ne "0" || "$CORRECT_VERSION" == "false" ]]
+		if [[ "$RETURNED" -ne "0" || "$CORRECT_VERSION" == "false" ]]
 		then
 			if [[ -n "$OLD_PACKAGE" ]]
 			then
@@ -86,6 +89,8 @@ function check_build_deps()
 
 			FAILED="true"
 		fi
+		unset OLD_PACKAGE
+		unset COMPARATOR
 	done
 
 	if [[ "$FAILED" == "true" ]]
