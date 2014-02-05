@@ -60,7 +60,7 @@ function check_build_deps()
 			COMPARATOR="${COMPARATOR%$VERSION}"
 		fi
 
-		local INSTALLED_VERSION=$(apt-cache show "$PACKAGE" 2> /dev/null | grep -o "Version: .*$")
+		local INSTALLED_VERSION=$(dpkg -s "$PACKAGE" 2> /dev/null | grep -o "Version: .*$")
 		local returned="$?"
 
 		#Strip unecessary parts
