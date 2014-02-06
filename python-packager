@@ -126,7 +126,6 @@ function package() {
 	local TMP_DIR="$2"
 	local OUTPUT_DIR="$3"
 	local VERSION="$4"
-	local LUCID="$5"
 	local CURRENT_DIR="$PWD"
 
 	# Create the dsc
@@ -145,13 +144,6 @@ function package() {
 	DEBIAN_PATH="${DEBIAN_PATH%.tar}"
 	DEBIAN_PATH=$(find "$TMP_DIR" -iname "$(basename $DEBIAN_PATH)")
 	cd "${DEBIAN_PATH}/debian"
-
-	# For Lucid we need to verify that the python dependency is set to >= 2.6 :(
-	if [[ "$LUCID" == "true" ]]
-	then
-		#echo "XS-Python-Version: all" >> control
-		sed -i '2s/^/X-Python-Version: all\n/' control
-	fi
 
 	# Modify version to match *-rdio#
 	if [[ "$VERSION" ]]
@@ -177,82 +169,6 @@ function package() {
 	then
 		cd "$CURRENT_DIR"
 		return "$SUCCESS"
-	fi
-
-	# cd back out of "${DEBIAN_PATH}/debian"
-	cd -
-
-	# Lucid is terrible and it's version of dpkg doesn't support .xz compressed files
-	if [[ "$LUCID" == "true" ]]
-	then
-		echo "INFO: Attempting to convert data.tar.xz to a Lucid compatable format..."
-		cd "$TMP_DIR"
-		DEB=$(ls *.deb)
-		SUCCESS="$?"
-
-		if [[ "$SUCCESS" -ne 0 ]]
-		then
-			echo "ERROR: Could not find the .deb!"
-			cd "$CURRENT_DIR"
-			return "$SUCCESS"
-		fi
-
-		# Extract xz
-		ar x "$DEB" "data.tar.xz"
-		SUCCESS="$?"
-
-		if [[ "$SUCCESS" -ne 0 ]]
-		then
-			echo "ERROR: Could not extract data.tar.xz from deb!"
-			cd "$CURRENT_DIR"
-			return "$SUCCESS"
-		fi
-
-		# Create dir to untar to
-		mkdir data
-		tar xf data.tar.xz -C data
-		SUCCESS="$?"
-
-		if [[ "$SUCCESS" -ne 0 ]]
-		then
-			echo "ERROR: Could not extract files from data.tar.xz!"
-			cd "$CURRENT_DIR"
-			return "$SUCCESS"
-		fi
-
-		cd data
-		tar czf ../data.tar.gz *
-		SUCCESS="$?"
-
-		if [[ "$SUCCESS" -ne 0 ]]
-		then
-			echo "ERROR: Could not create data.tar.gz!"
-			cd "$CURRENT_DIR"
-			return "$SUCCESS"
-		fi
-
-		cd -
-		# Remove xz entry
-		ar d "$DEB" "data.tar.xz"
-		SUCCESS="$?"
-
-		if [[ "$SUCCESS" -ne 0 ]]
-		then
-			echo "ERROR: Could not delete data.tar.xz from .deb!"
-			cd "$CURRENT_DIR"
-			return "$SUCCESS"
-		fi
-
-		# Insert gz entry
-		ar r "$DEB" "data.tar.gz"
-		SUCCESS="$?"
-
-		if [[ "$SUCCESS" -ne 0 ]]
-		then
-			echo "ERROR: Could not add data.tar.gz to .deb!"
-			cd "$CURRENT_DIR"
-			return "$SUCCESS"
-		fi
 	fi
 
 	# Finally, copy the .deb to OUTPUT_DIR
@@ -281,11 +197,10 @@ function main() {
 	local ARCHIVE_PATH
 	local TMP_DIR
 	local RET
-	local LUCID="false"
 	local OUTPUT_DIR="$PWD"
 	local DELETE="true"
 	local VERSION
-	while getopts "d:f:o:t:V:L" OPTION;
+	while getopts "d:f:o:t:V:" OPTION;
 	do
 		case "$OPTION" in
 		d)
@@ -304,9 +219,6 @@ function main() {
 		;;
 		V)
 			VERSION="$OPTARG"
-		;;
-		L)
-			LUCID="true"
 		;;
 		?)
 			echo "$USAGE"
@@ -347,11 +259,11 @@ function main() {
 			exit 1
 		fi
 
-		package "${TMP_DIR}/${ARCHIVE_PATH}" "$TMP_DIR" "$OUTPUT_DIR" "$VERSION" "$LUCID"
+		package "${TMP_DIR}/${ARCHIVE_PATH}" "$TMP_DIR" "$OUTPUT_DIR" "$VERSION"
 		RET=$?
 	elif [[ "$ARCHIVE_PATH" ]]
 	then
-		package "$ARCHIVE_PATH" "$TMP_DIR" "$OUTPUT_DIR" "$VERSION" "$LUCID"
+		package "$ARCHIVE_PATH" "$TMP_DIR" "$OUTPUT_DIR" "$VERSION"
 		RET=$?
 	fi
 
