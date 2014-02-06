@@ -139,7 +139,6 @@ function package() {
 
 
 	# Determine the path we need to cd to
-	set -x
 	DEBIAN_PATH="${DEBIAN_PATH%.*}"
 	DEBIAN_PATH="${DEBIAN_PATH%.tar}"
 	DEBIAN_PATH=$(find "$TMP_DIR" -iname "$(basename $DEBIAN_PATH)")
